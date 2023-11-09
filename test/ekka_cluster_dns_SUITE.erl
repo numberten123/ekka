@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019-2022 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -55,30 +55,26 @@ end_per_testcase(_, Config) -> Config.
 
 all() -> ekka_ct:all(?MODULE).
 
-%% This test case relies on DNS resolution from localhost to 127.0.0.1
 t_discover(_) ->
     Options1 = [{name, "localhost"}, {app, "ekka"}],
-    {ok, ['ekka@127.0.0.1']} = ekka_cluster_strategy:discover(ekka_cluster_dns, Options1),
+    {ok, ['ekka@127.0.0.1']} = ekka_cluster_dns:discover(Options1),
 
     Options2 = [{name, "emqx.default.svc.cluster.local"}, {app, "ekka"}, {type, srv}],
     {ok, ['ekka@emqx-0.emqx.default.svc.cluster.local',
           'ekka@emqx-1.emqx.default.svc.cluster.local',
           'ekka@emqx-2.emqx.default.svc.cluster.local'
-         ]} = ekka_cluster_strategy:discover(ekka_cluster_dns, Options2),
-
-    Options3 = [{name, "localhost"}],
-    %% below test relies on rebar3 ct is run with '--name ct@127.0.0.1'
-    {ok, ['ct@127.0.0.1']} = ekka_cluster_strategy:discover(ekka_cluster_dns, Options3),
+         ]} = ekka_cluster_dns:discover(Options2),
     ok.
 
 t_lock(_) ->
-    ignore = ekka_cluster_strategy:lock(ekka_cluster_dns, []).
+    ignore = ekka_cluster_dns:lock([]).
 
 t_unlock(_) ->
-    ignore = ekka_cluster_strategy:unlock(ekka_cluster_dns, []).
+    ignore = ekka_cluster_dns:unlock([]).
 
 t_register(_) ->
-    ignore = ekka_cluster_strategy:register(ekka_cluster_dns, []).
+    ignore = ekka_cluster_dns:register([]).
 
 t_unregister(_) ->
-    ignore = ekka_cluster_strategy:unregister(ekka_cluster_dns, []).
+    ignore = ekka_cluster_dns:unregister([]).
+

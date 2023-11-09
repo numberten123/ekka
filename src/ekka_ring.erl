@@ -16,7 +16,7 @@
 
 -module(ekka_ring).
 
--include_lib("mria/include/mria.hrl").
+-include("ekka.hrl").
 
 -export([ find_node/2
         , find_nodes/2

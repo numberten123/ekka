@@ -1,5 +1,3 @@
-BUILD_DIR := $(CURDIR)/_build
-
 REBAR := rebar3
 
 CT_NODE_NAME = ct@127.0.0.1
@@ -8,7 +6,7 @@ CT_NODE_NAME = ct@127.0.0.1
 all: compile
 
 compile:
-	$(REBAR) do compile, xref, dialyzer
+	$(REBAR) do compile, dialyzer, xref
 
 .PHONY: clean
 clean: distclean
@@ -27,15 +25,7 @@ eunit: compile
 
 .PHONY: ct
 ct: compile
-	$(REBAR) do eunit, ct -v --readable=false --name $(CT_NODE_NAME)
-
-.PHONY: ct-suite
-ct-suite: compile
-ifneq ($(TESTCASE),)
-	$(REBAR) ct -v --readable=false --name $(CT_NODE_NAME) --suite $(SUITE)  --case $(TESTCASE)
-else
-	$(REBAR) ct -v --readable=false --name $(CT_NODE_NAME) --suite $(SUITE)
-endif
+	$(REBAR) as test ct -v --readable=false --name $(CT_NODE_NAME)
 
 cover:
 	$(REBAR) cover
@@ -47,3 +37,12 @@ coveralls:
 .PHONY: dialyzer
 dialyzer:
 	$(REBAR) dialyzer
+
+CUTTLEFISH_SCRIPT = _build/default/lib/cuttlefish/cuttlefish
+
+$(CUTTLEFISH_SCRIPT):
+	@${REBAR} get-deps
+	@if [ ! -f cuttlefish ]; then make -C _build/default/lib/cuttlefish; fi
+
+app.config: $(CUTTLEFISH_SCRIPT)
+	$(verbose) $(CUTTLEFISH_SCRIPT) -l info -e etc/ -c etc/ekka.conf.example -i priv/ekka.schema -d data/

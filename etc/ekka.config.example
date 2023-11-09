@@ -1,6 +1,7 @@
 [{ekka, [
   {cluster_name, ekka},
   {cluster_autoheal, true},
+  {cluster_autoclean, 60000},
   {proto_dist, inet_tcp},
 
 %% Clustering via static node list
@@ -26,7 +27,6 @@
 %% Clustering via etcd
 %% {cluster_discovery, {etcd, [
 %%                       {server, ["http://127.0.0.1:2379"]},
-%%                       {version, v3},
 %%                       {prefix, "ekkacluster"},
 %%                       {ssl_options, [{keyfile, "path/to/client-key.pem"},
 %%                                      {certfile, "path/to/client.pem"},

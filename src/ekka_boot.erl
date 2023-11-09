@@ -16,23 +16,7 @@
 
 -module(ekka_boot).
 
--export([ apply_module_attributes/1
-        , all_module_attributes/1
-
-        , create_tables/0
-        , register_mria_callbacks/0
-        ]).
-
-%% @doc Run the hooks to create mnesia tables
-create_tables() ->
-    ekka_boot:apply_module_attributes(boot_mnesia).
-
-%% @dec Register actions that will be performed during Mria heal
-register_mria_callbacks() ->
-    mria_config:register_callback(start, fun ekka:start/0),
-    mria_config:register_callback(stop, fun ekka:stop/0),
-    mria_config:register_callback(core_node_discovery,
-                                  fun ekka_autocluster:core_node_discovery_callback/0).
+-export([apply_module_attributes/1, all_module_attributes/1]).
 
 %% only {F, Args}...
 apply_module_attributes(Name) ->
@@ -75,3 +59,4 @@ ignore_lib_apps(Apps) ->
                test_server, compiler, debugger, eunit, et,
                wx],
     [App || App = {Name, _, _} <- Apps, not lists:member(Name, LibApps)].
+

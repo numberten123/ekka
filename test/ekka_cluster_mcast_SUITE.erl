@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019, 2022 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -67,17 +67,18 @@ t_discover(_) ->
     Datagram = {udp, Sock, {127,0,0,1}, 5000, term_to_binary(Pong)},
     Pid ! Datagram,
     Node = node(),
-    {ok, [Node, 'node1@192.168.10.10']} = ekka_cluster_strategy:discover(ekka_cluster_mcast, ?OPTIONS),
+    {ok, [Node, 'node1@192.168.10.10']} = ekka_cluster_mcast:discover(?OPTIONS),
     ok = ekka_cluster_mcast:stop().
 
 t_lock(_) ->
-    ignore = ekka_cluster_strategy:lock(ekka_cluster_mcast, []).
+    ignore = ekka_cluster_mcast:lock([]).
 
 t_unlock(_) ->
-    ignore = ekka_cluster_strategy:unlock(ekka_cluster_mcast, []).
+    ignore = ekka_cluster_mcast:unlock([]).
 
 t_register(_) ->
-    ignore = ekka_cluster_strategy:register(ekka_cluster_mcast, []).
+    ignore = ekka_cluster_mcast:register([]).
 
 t_unregister(_) ->
-    ignore = ekka_cluster_strategy:unregister(ekka_cluster_mcast, []).
+    ignore = ekka_cluster_mcast:unregister([]).
+

@@ -1,18 +1,18 @@
 {application, ekka,
- [{description, "Autocluster for EMQ X Broker"},
+ [{description, "Autocluster and Autoheal for EMQ X Broker"},
   {vsn, "git"},
   {mod, {ekka_app,[]}},
   {registered,
    [ekka_sup,
-    ekka_cluster_sup
+    ekka_membership,
+    ekka_cluster_sup,
+    ekka_node_monitor
    ]},
   {applications,
    [kernel,
     stdlib,
-    inets,
-    eetcd,
-    snabbkaffe,
-    mria
+    mnesia,
+    inets
    ]},
   {modules, []},
   {licenses, ["Apache 2.0"]},

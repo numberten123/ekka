@@ -62,22 +62,7 @@ init([]) ->
                                modules  => [ekka_cluster_mcast]
                               },
                      [Mcast];
-                 {ok, {etcd, Options}} ->
-                    case proplists:get_value(version, Options, v3) of
-                        v3 ->
-                            Eecs_v3 = #{id       => ekka_cluster_etcd,
-                                        start    => {ekka_cluster_etcd, start_link, [Options]},
-                                        restart  => permanent,
-                                        shutdown => 5000,
-                                        type     => worker,
-                                        modules  => [ekka_cluster_etcd]
-                                    },
-                            [Eecs_v3];
-                        _ -> 
-                            []
-                    end;
-                 _Other -> 
-                    []
+                 _Other -> []
              end,
     {ok, {{one_for_one, 10, 100}, Childs}}.
 

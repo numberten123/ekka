@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019-2023 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,26 +16,11 @@
 
 -module(ekka_autocluster).
 
--behavior(gen_server).
+-include("ekka.hrl").
 
--include_lib("mria/include/mria.hrl").
--include_lib("snabbkaffe/include/snabbkaffe.hrl").
+-export([enabled/0 , run/1, unregister_node/0]).
 
-%% API
--export([ enabled/0
-        , run/1
-        , unregister_node/0
-        , core_node_discovery_callback/0
-        ]).
-
-%% gen_server callbacks
--export([ init/1
-        , handle_call/3
-        , handle_cast/2
-        , handle_info/2
-        ]).
-
--define(SERVER, ?MODULE).
+-export([acquire_lock/1, release_lock/1]).
 
 -define(LOG(Level, Format, Args),
         logger:Level("Ekka(AutoCluster): " ++ Format, Args)).
@@ -43,113 +28,35 @@
 %% ms
 -define(DISCOVER_AND_JOIN_RETRY_INTERVAL, 5000).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% API
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
--spec enabled() -> boolean().
+-spec(enabled() -> boolean()).
 enabled() ->
     case ekka:env(cluster_discovery) of
         {ok, {manual, _}} -> false;
-        {ok, _Strategy}   -> mria_config:role() =:= core;
+        {ok, _Strategy}   -> true;
         undefined         -> false
     end.
 
--spec run(atom()) -> ok | ignore.
+-spec(run(atom()) -> any()).
 run(App) ->
-    ?tp(ekka_autocluster_run, #{app => App}),
-    case enabled() andalso gen_server:start({local, ?SERVER}, ?MODULE, [App], []) of
-        {ok, _Pid} ->
-            ok;
-        {error, {already_started, _}} ->
-            ignore;
-        false ->
-            ignore
+    case acquire_lock(App) of
+        ok ->
+            spawn(fun() ->
+                      group_leader(whereis(init), self()),
+                      wait_application_ready(App, 10),
+                      JoinResult =
+                        try
+                            discover_and_join()
+                        catch
+                            _:Error:Stacktrace ->
+                                ?LOG(error, "Discover error: ~p~n~p", [Error, Stacktrace]),
+                                error
+                        after
+                            release_lock(App)
+                        end,
+                      maybe_run_again(App, JoinResult)
+                  end);
+        failed -> ignore
     end.
-
--spec unregister_node() -> ok | ignore.
-unregister_node() ->
-    with_strategy(
-      fun(Mod, Options) ->
-          log_error("Unregister", ekka_cluster_strategy:unregister(Mod, Options))
-      end).
-
-%% @doc Core node discovery used by mria by replicant nodes to find
-%% the core nodes.
--spec core_node_discovery_callback() -> [node()].
-core_node_discovery_callback() ->
-    case ekka:env(cluster_discovery) of
-        {ok, {manual, _}} ->
-            [];
-        {ok, {Strategy, Options}} ->
-            Mod = strategy_module(Strategy),
-            try ekka_cluster_strategy:discover(Mod, Options) of
-                {ok, Nodes} ->
-                    Nodes;
-                {error, Reason} ->
-                    ?LOG(error, "Core node discovery error: ~p", [Reason]),
-                    []
-            catch _:Err:Stack ->
-                    ?LOG(error, "Core node discovery error ~p: ~p", [Err, Stack]),
-                    []
-            end;
-        undefined ->
-            []
-    end.
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% gen_server callbacks
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
--record(s,
-        { application :: atom()
-        }).
-
-init([App]) ->
-    group_leader(whereis(init), self()),
-    self() ! loop,
-    {ok, #s{ application = App
-           }}.
-
-handle_info(loop, S = #s{application = App}) ->
-    wait_application_ready(App, 10),
-    JoinResult = discover_and_join(),
-    case is_discovery_complete(JoinResult) of
-        true ->
-            ?tp(ekka_autocluster_complete, #{app => App}),
-            {stop, normal, S};
-        false ->
-            timer:send_after(?DISCOVER_AND_JOIN_RETRY_INTERVAL, loop),
-            {noreply, S}
-    end;
-handle_info(_, S) ->
-    {noreply, S}.
-
-is_discovery_complete(ignore) ->
-    is_node_registered();
-is_discovery_complete(JoinResult) ->
-    %% Check if the node joined cluster?
-    NodeInCluster = mria:cluster_nodes(all) =/= [node()],
-    %% Possibly there are nodes outside the cluster; keep trying if
-    %% so.
-    NoNodesOutside = JoinResult =:= ok,
-    Registered = is_node_registered(),
-    ?tp(ekka_maybe_run_app_again,
-        #{ node_in_cluster  => NodeInCluster
-         , node_registered  => Registered
-         , no_nodes_outside => NoNodesOutside
-         }),
-    Registered andalso NodeInCluster andalso NoNodesOutside.
-
-handle_call(_Req, _From, S) ->
-    {reply, {error, unknown_call}, S}.
-
-handle_cast(_Req, S) ->
-    {noreply, S}.
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Internal functions
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 wait_application_ready(_App, 0) ->
     timeout;
@@ -160,23 +67,58 @@ wait_application_ready(App, Retries) ->
                  wait_application_ready(App, Retries - 1)
     end.
 
--spec discover_and_join() -> ok | ignore | error.
+maybe_run_again(App, JoinResult) ->
+    %% Check if the node joined cluster?
+    NodeInCluster = ekka_mnesia:is_node_in_cluster(),
+    %% Possibly there are nodes outside the cluster; keep trying if
+    %% so.
+    NoNodesOutside = JoinResult =:= ok,
+    case NodeInCluster andalso NoNodesOutside of
+        true  ->
+            ok;
+        false ->
+            % ?LOG(warning, "discovery did not succeed; retrying in ~p ms",
+                %  [?DISCOVER_AND_JOIN_RETRY_INTERVAL]),
+            timer:sleep(?DISCOVER_AND_JOIN_RETRY_INTERVAL),
+            run(App)
+    end.
+
+-spec(discover_and_join() -> any()).
 discover_and_join() ->
     with_strategy(
       fun(Mod, Options) ->
-        try ekka_cluster_strategy:lock(Mod, Options) of
+        case Mod:lock(Options) of
             ok ->
-                discover_and_join(Mod, Options);
+                Res = discover_and_join(Mod, Options),
+                log_error("Unlock", Mod:unlock(Options)),
+                Res;
             ignore ->
                 timer:sleep(rand:uniform(3000)),
                 discover_and_join(Mod, Options);
             {error, Reason} ->
                 ?LOG(error, "AutoCluster stopped for lock error: ~p", [Reason]),
                 error
-        after
-            log_error("Unlock", ekka_cluster_strategy:unlock(Mod, Options))
         end
       end).
+
+-spec(unregister_node() -> ok).
+unregister_node() ->
+    with_strategy(
+      fun(Mod, Options) ->
+          log_error("Unregister", Mod:unregister(Options))
+      end).
+
+-spec(acquire_lock(atom()) -> ok | failed).
+acquire_lock(App) ->
+    case application:get_env(App, autocluster_lock) of
+        undefined ->
+            application:set_env(App, autocluster_lock, true);
+        {ok, _} -> failed
+    end.
+
+-spec(release_lock(atom()) -> ok).
+release_lock(App) ->
+    application:unset_env(App, autocluster_lock).
 
 with_strategy(Fun) ->
     case ekka:env(cluster_discovery) of
@@ -194,48 +136,36 @@ strategy_module(Strategy) ->
         false     -> list_to_atom("ekka_cluster_" ++  atom_to_list(Strategy))
     end.
 
--spec discover_and_join(module(), ekka_cluster_strategy:options()) -> ok | ignore | error.
 discover_and_join(Mod, Options) ->
-    ?tp(ekka_autocluster_discover_and_join, #{mod => Mod}),
-    try ekka_cluster_strategy:discover(Mod, Options) of
+    case Mod:discover(Options) of
         {ok, Nodes} ->
-            ?tp(ekka_autocluster_discover_and_join_ok, #{mod => Mod, nodes => Nodes}),
             {AliveNodes, DeadNodes} = lists:partition(
                                         fun ekka_node:is_aliving/1,
                                         Nodes),
             Res = maybe_join(AliveNodes),
             ?LOG(debug, "join result: ~p", [Res]),
-            log_error("Register", ekka_cluster_strategy:register(Mod, Options)),
+            log_error("Register", Mod:register(Options)),
             case DeadNodes of
                 [] ->
-                    ?LOG(info, "all discovered nodes are alive", []),
-                    case Res of
-                        {error, _} -> error;
-                        ok         -> ok;
-                        ignore     -> ignore
-                    end;
+                    % ?LOG(info, "no discovered nodes outside cluster", []),
+                    ok;
                 [_ | _] ->
-                    ?LOG(info, "discovered nodes are not responding: ~p", [DeadNodes]),
+                    ?LOG(warning, "discovered nodes outside cluster: ~p", [DeadNodes]),
                     error
             end;
         {error, Reason} ->
             ?LOG(error, "Discovery error: ~p", [Reason]),
             error
-    catch
-        _:Error:Stacktrace ->
-            ?LOG(error, "Discover error: ~p~n~p", [Error, Stacktrace]),
-            error
     end.
 
--spec maybe_join([node()]) -> ignore | ok | {error, _}.
 maybe_join([]) ->
     ignore;
 maybe_join(Nodes0) ->
     Nodes = lists:usort(Nodes0),
-    KnownNodes = lists:usort(mria:cluster_nodes(all)),
+    KnownNodes = lists:usort(ekka_mnesia:cluster_nodes(all)),
     case Nodes =:= KnownNodes of
         true  ->
-            ?LOG(info, "all discovered nodes already in cluster; ignoring", []),
+            % ?LOG(info, "all discovered nodes already in cluster; ignoring", []),
             ignore;
         false ->
             OldestNode = find_oldest_node(Nodes),
@@ -248,35 +178,22 @@ join_with(false) ->
 join_with(Node) when Node =:= node() ->
     ignore;
 join_with(Node) ->
-    Res = ekka_cluster:join(Node),
-    %% Wait for ekka to be restarted after join to avoid noproc error
-    %% that can occur if underlying cluster implementation (e.g. ekka_cluster_etcd)
-    %% uses some processes started under ekka supervision tree
-    _ = wait_application_ready(ekka, 10),
-    Res.
+    ekka_cluster:join(Node).
 
 find_oldest_node([Node]) ->
     Node;
 find_oldest_node(Nodes) ->
-    case rpc:multicall(Nodes, mria_membership, local_member, [], 30000) of
+    case rpc:multicall(Nodes, ekka_membership, local_member, [], 30000) of
         {ResL, []} ->
             case [M || M <- ResL, is_record(M, member)] of
-                [] ->
-                    ?LOG(error, "bad_members_found, all_nodes: ~p~n"
-                                "normal_rpc_results:~p", [Nodes, ResL]),
-                    false;
+                [] -> ?LOG(error, "Bad members found on nodes ~p: ~p", [Nodes, ResL]),
+                      false;
                 Members ->
-                    (mria_membership:oldest(Members))#member.node
+                    (ekka_membership:oldest(Members))#member.node
             end;
         {ResL, BadNodes} ->
-            ?LOG(error, "bad_nodes_found, failed_nodes: ~p~n"
-                        "normal_rpc_results: ~p", [BadNodes, ResL]),
-            false
+            ?LOG(error, "Bad nodes found: ~p, ResL: ", [BadNodes, ResL]), false
    end.
-
-is_node_registered() ->
-    Nodes = core_node_discovery_callback(),
-    lists:member(node(), Nodes).
 
 log_error(Format, {error, Reason}) ->
     ?LOG(error, Format ++ " error: ~p", [Reason]);

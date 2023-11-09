@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2019-2023 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2019 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,8 +16,7 @@
 
 -module(ekka).
 
--include_lib("mria/include/mria.hrl").
--include_lib("snabbkaffe/include/snabbkaffe.hrl").
+-include("ekka.hrl").
 
 %% Start/Stop
 -export([start/0, stop/0]).
@@ -40,8 +39,8 @@
         , autocluster/1
         ]).
 
-%% Callbacks
--export([ exec_callback/1
+%% Register callback
+-export([ callback/1
         , callback/2
         ]).
 
@@ -91,18 +90,19 @@
 
 -spec(start() -> ok).
 start() ->
-    ok = mria:start(),
-    ?tp(info, "Starting ekka", #{}),
-    ekka_boot:register_mria_callbacks(),
+    case ekka_mnesia:start() of
+        ok -> ok;
+        {error, {timeout, Tables}} ->
+            logger:error("Mnesia wait_for_tables timeout: ~p", [Tables]),
+            ok;
+        {error, Reason} ->
+            error(Reason)
+    end,
     {ok, _Apps} = application:ensure_all_started(ekka),
-    ?tp(info, "Ekka is running", #{}),
-    ekka_boot:create_tables(),
-    ekka:exec_callback(start),
     ok.
 
 -spec(stop() -> ok).
 stop() ->
-    ekka:exec_callback(stop),
     application:stop(ekka).
 
 %%--------------------------------------------------------------------
@@ -129,7 +129,7 @@ info(Key) ->
 -spec(info() -> infos()).
 info() ->
     ClusterInfo = ekka_cluster:info(),
-    Partitions = mria_node_monitor:partitions(),
+    Partitions = ekka_node_monitor:partitions(),
     maps:merge(ClusterInfo, #{members    => members(),
                               partitions => Partitions
                              }).
@@ -166,14 +166,12 @@ autocluster(App) ->
     end.
 
 %%--------------------------------------------------------------------
-%% Callbacks
+%% Register callback
 %%--------------------------------------------------------------------
--spec exec_callback(atom()) -> term().
-exec_callback(Name) ->
-    case env({callback, Name}) of
-      {ok, Fun} -> Fun();
-      undefined -> ok
-    end.
+
+-spec callback(atom()) -> undefined | {ok, function()}.
+callback(Name) ->
+    env({callback, Name}).
 
 -spec(callback(atom(), function()) -> ok).
 callback(Name, Fun) ->
@@ -201,38 +199,38 @@ is_running(Node, App) ->
 
 %% Cluster members
 -spec(members() -> list(member())).
-members() -> mria_membership:members().
+members() -> ekka_membership:members().
 
 %% Local member
 -spec(local_member() -> member()).
-local_member() -> mria_membership:local_member().
+local_member() -> ekka_membership:local_member().
 
 %% Is node a member?
 -spec(is_member(node()) -> boolean()).
-is_member(Node) -> mria_membership:is_member(Node).
+is_member(Node) -> ekka_membership:is_member(Node).
 
 %% Node list
 -spec(nodelist() -> list(node())).
-nodelist() -> mria_membership:nodelist().
+nodelist() -> ekka_membership:nodelist().
 
 -spec(nodelist(up|down) -> list(node())).
-nodelist(Status) -> mria_membership:nodelist(Status).
+nodelist(Status) -> ekka_membership:nodelist(Status).
 
 %%--------------------------------------------------------------------
 %% Membership Monitor API
 %%--------------------------------------------------------------------
 
 monitor(Type) when ?IS_MON_TYPE(Type) ->
-    mria_membership:monitor(Type, self(), true).
+    ekka_membership:monitor(Type, self(), true).
 
 monitor(Type, Fun) when is_function(Fun), ?IS_MON_TYPE(Type) ->
-    mria_membership:monitor(Type, Fun, true).
+    ekka_membership:monitor(Type, Fun, true).
 
 unmonitor(Type) when ?IS_MON_TYPE(Type) ->
-    mria_membership:monitor(Type, self(), false).
+    ekka_membership:monitor(Type, self(), false).
 
 unmonitor(Type, Fun) when is_function(Fun), ?IS_MON_TYPE(Type) ->
-    mria_membership:monitor(Type, Fun, false).
+    ekka_membership:monitor(Type, Fun, false).
 
 %%--------------------------------------------------------------------
 %% Locker API

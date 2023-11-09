@@ -14,7 +14,7 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(ekka_guid_SUITE).
+-module(ekka_autoclean_SUITE).
 
 -compile(export_all).
 -compile(nowarn_export_all).
@@ -23,21 +23,24 @@
 
 all() -> ekka_ct:all(?MODULE).
 
-t_gen(_) ->
-    <<_:128>> = Guid1 = ekka_guid:gen(),
-    <<_:128>> = Guid2 = ekka_guid:gen(),
-    ?assert(Guid2 > Guid1).
+init_per_suite(Config) ->
+    ok = application:set_env(ekka, cluster_name, ekka),
+    ok = application:set_env(ekka, cluster_autoclean, 1000),
+    ok = application:set_env(ekka, cluster_discovery, {manual, []}),
+    ok = ekka:start(),
+    Config.
 
-t_new(_) ->
-    {Ts1, _NPid, 0} = ekka_guid:new(),
-    {Ts2, _NPid, 0} = ekka_guid:new(),
-    ?assert(Ts2 > Ts1).
+end_per_suite(_Config) ->
+    application:stop(ekka),
+    ekka_mnesia:ensure_stopped().
 
-t_timestamp(_) ->
-    Ts1 = ekka_guid:timestamp(ekka_guid:gen()),
-    Ts2 = ekka_guid:timestamp(ekka_guid:gen()),
-    ?assert(Ts2 > Ts1).
-
-t_to_from_hexstr(_) ->
-    ?assertEqual(Guid = ekka_guid:gen(), ekka_guid:from_hexstr(ekka_guid:to_hexstr(Guid))).
+t_autoclean(_) ->
+    N0 = node(),
+    N1 = ekka_ct:start_slave(ekka, n1),
+    ok = rpc:call(N1, ekka_cluster, join, [N0]),
+    [N0, N1] = ekka_cluster:info(running_nodes),
+    ok = ekka_ct:stop_slave(N1),
+    ok = timer:sleep(2000),
+    [N0] = ekka_cluster:info(running_nodes),
+    ekka:force_leave(N1).
 
